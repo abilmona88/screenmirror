@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import streamlit as st
 
 from ux_manager import (
@@ -8,22 +11,45 @@ from ux_manager import (
     get_pid,
 )
 
+
 st.set_page_config(
     page_title="Device Mirroring (UxPlay)",
     page_icon="📱",
     layout="centered",
 )
 
+
+def auto_detect_uxplay() -> str:
+    """
+    Try to find the uxplay binary automatically.
+
+    Order:
+    1. PATH (shutil.which)
+    2. /usr/local/bin/uxplay
+    3. /opt/homebrew/bin/uxplay
+
+    Returns the first executable it finds, or just "uxplay" as a last resort.
+    """
+    candidates = [
+        shutil.which("uxplay"),
+        "/usr/local/bin/uxplay",
+        "/opt/homebrew/bin/uxplay",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    # Fallback: let the manager try "uxplay" and raise a clear error if it fails
+    return "uxplay"
+
+
 # --- Defaults ---
-DEFAULT_BINARY = "uxplay"          # uxplay is on your PATH now
 DEFAULT_IPAD_NAME = "iPadMirror"
 DEFAULT_IPAD_PORT = 7000
 DEFAULT_IPHONE_NAME = "iPhoneMirror"
 DEFAULT_IPHONE_PORT = 7100
 
-# Session state
 if "binary_path" not in st.session_state:
-    st.session_state["binary_path"] = DEFAULT_BINARY
+    st.session_state["binary_path"] = auto_detect_uxplay()
 if "ipad_name" not in st.session_state:
     st.session_state["ipad_name"] = DEFAULT_IPAD_NAME
 if "ipad_port" not in st.session_state:
@@ -33,19 +59,22 @@ if "iphone_name" not in st.session_state:
 if "iphone_port" not in st.session_state:
     st.session_state["iphone_port"] = DEFAULT_IPHONE_PORT
 
+binary_path = st.session_state["binary_path"]
+
 # --- Header ---
 st.title("📱 Device Mirroring via UxPlay")
+
 st.markdown(
     """
-This page lets **anyone** connect their iPhone/iPad to your Mac via AirPlay.
+This app starts **two UxPlay receivers** on your Mac (e.g. one for iPad, one for iPhone).
 
-**Host (you):**
-1. Click the **Start** buttons below.
+**Host (you) does:**
+1. Click **Start Receiver 1** and/or **Start Receiver 2**.
 2. Arrange the UxPlay windows on your screen.
 3. Share your screen in Zoom/Teams.
 
-**Guests (anyone else):**
-1. On their device, open **Control Center**.
+**Guests do on their devices:**
+1. On iPhone/iPad, open **Control Center**.
 2. Tap **Screen Mirroring**.
 3. Tap the name you tell them (e.g. `iPadMirror` or `iPhoneMirror`).
 """
@@ -54,21 +83,22 @@ This page lets **anyone** connect their iPhone/iPad to your Mac via AirPlay.
 with st.expander("Advanced: UxPlay binary path", expanded=False):
     st.write(
         """
-If `uxplay` works in Terminal (you can run `uxplay -h`), leave this as `uxplay`.
+The app tries to auto-detect the **uxplay** binary.
 
-Only change this if you installed UxPlay to a custom path and `uxplay` is **not**
-on your PATH.
+If `uxplay -h` works in Terminal, you usually don't need to touch this.
+
+Only change this if you installed UxPlay to a non-standard location.
 """
     )
     binary_path = st.text_input(
         "UxPlay binary path",
-        value=st.session_state["binary_path"],
+        value=binary_path,
         key="binary_path",
     )
 
 st.divider()
 
-# --- iPad receiver ---
+# --- Receiver 1 (e.g. iPad) ---
 st.subheader("🧊 Receiver 1 (e.g. iPad)")
 
 col1, col2 = st.columns(2)
@@ -82,7 +112,7 @@ with col2:
     ipad_port = st.number_input(
         "Base port",
         min_value=1000,
-        max_value=65500,
+        max_value=65535,
         step=1,
         value=int(st.session_state["ipad_port"]),
         key="ipad_port",
@@ -92,6 +122,7 @@ ipad_running = is_running("ipad")
 ipad_pid = get_pid("ipad")
 
 c1, c2, c3 = st.columns([1, 1, 2])
+
 with c1:
     if st.button("▶️ Start Receiver 1", type="primary", key="start_ipad"):
         if ipad_running:
@@ -100,15 +131,18 @@ with c1:
             try:
                 pid = start_instance(
                     label="ipad",
-                    binary_path=binary_path,
+                    binary_path=st.session_state["binary_path"],
                     airplay_name=ipad_name,
                     base_port=int(ipad_port),
                 )
                 st.success(f"Started Receiver 1 (PID={pid}).")
-            except FileNotFoundError:
+            except FileNotFoundError as e:
                 st.error(
-                    f"UxPlay not found at '{binary_path}'. "
-                    "If `uxplay -h` works in Terminal, set this to 'uxplay'."
+                    f"Couldn't find UxPlay executable.\n\n"
+                    f"Tried: `{st.session_state['binary_path']}`\n\n"
+                    "Make sure UxPlay is installed and accessible.\n"
+                    "You can also manually set the full path above "
+                    "(for example `/usr/local/bin/uxplay`)."
                 )
             except Exception as e:
                 st.error(f"Failed to start Receiver 1: {e}")
@@ -135,10 +169,10 @@ st.markdown(
 **Instructions for guests (Receiver 1):**
 
 1. Make sure their device is on the **same Wi-Fi** as this Mac.
-2. On their iPad/iPhone:
-   - Swipe **down from the top-right** to open **Control Center**.
-   - Tap **Screen Mirroring**.
-   - Tap **`{ipad_name}`** in the list.
+2. On their iPhone/iPad:
+   * Swipe **down from the top-right** to open **Control Center**.
+   * Tap **Screen Mirroring**.
+   * Tap **`{ipad_name}`**.
 
 Their screen will appear in a UxPlay window on your Mac.
 """
@@ -146,7 +180,7 @@ Their screen will appear in a UxPlay window on your Mac.
 
 st.divider()
 
-# --- iPhone receiver ---
+# --- Receiver 2 (e.g. iPhone) ---
 st.subheader("📱 Receiver 2 (e.g. iPhone)")
 
 col1, col2 = st.columns(2)
@@ -160,7 +194,7 @@ with col2:
     iphone_port = st.number_input(
         "Base port",
         min_value=1000,
-        max_value=65500,
+        max_value=65535,
         step=1,
         value=int(st.session_state["iphone_port"]),
         key="iphone_port",
@@ -170,6 +204,7 @@ iphone_running = is_running("iphone")
 iphone_pid = get_pid("iphone")
 
 c1, c2, c3 = st.columns([1, 1, 2])
+
 with c1:
     if st.button("▶️ Start Receiver 2", type="primary", key="start_iphone"):
         if iphone_running:
@@ -178,15 +213,18 @@ with c1:
             try:
                 pid = start_instance(
                     label="iphone",
-                    binary_path=binary_path,
+                    binary_path=st.session_state["binary_path"],
                     airplay_name=iphone_name,
                     base_port=int(iphone_port),
                 )
                 st.success(f"Started Receiver 2 (PID={pid}).")
             except FileNotFoundError:
                 st.error(
-                    f"UxPlay not found at '{binary_path}'. "
-                    "If `uxplay -h` works in Terminal, set this to 'uxplay'."
+                    f"Couldn't find UxPlay executable.\n\n"
+                    f"Tried: `{st.session_state['binary_path']}`\n\n"
+                    "Make sure UxPlay is installed and accessible.\n"
+                    "You can also manually set the full path above "
+                    "(for example `/usr/local/bin/uxplay`)."
                 )
             except Exception as e:
                 st.error(f"Failed to start Receiver 2: {e}")
@@ -214,9 +252,9 @@ st.markdown(
 
 1. Make sure their device is on the **same Wi-Fi** as this Mac.
 2. On their iPhone/iPad:
-   - Swipe **down from the top-right** to open **Control Center**.
-   - Tap **Screen Mirroring**.
-   - Tap **`{iphone_name}`** in the list.
+   * Swipe **down from the top-right** to open **Control Center**.
+   * Tap **Screen Mirroring**.
+   * Tap **`{iphone_name}`**.
 
 Their screen will appear in another UxPlay window on your Mac.
 """
@@ -225,6 +263,7 @@ Their screen will appear in another UxPlay window on your Mac.
 st.divider()
 
 st.subheader("Global controls")
+
 if st.button("🛑 Stop ALL receivers", key="stop_all"):
     stopped = stop_all()
     if stopped == 0:
@@ -233,6 +272,6 @@ if st.button("🛑 Stop ALL receivers", key="stop_all"):
         st.success(f"Stopped {stopped} UxPlay instance(s).")
 
 st.caption(
-    "Tip: Once both receivers are running and connected, arrange the two windows "
+    "Once both receivers are running and connected, arrange the two windows "
     "side by side and share your screen in Zoom/Teams."
 )
